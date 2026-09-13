@@ -1,0 +1,22 @@
+# Xcode & Swift Build Artifacts
+build/
+.build/
+DerivedData/
+*.xcworkspace/*xcuserdatad/
+*.xcodeproj/*xcuserdatad/
+xcuserdata/
+*.xcuserdatad/
+*.xcuserstate
+
+# Distributables (Binärdateien am besten via GitHub Releases bereitstellen)
+dist/
+
+# macOS Systemdateien
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Download-Verlauf & Test-Dateien
+.download_history.json
+scratch/
