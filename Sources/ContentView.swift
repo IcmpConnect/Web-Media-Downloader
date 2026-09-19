@@ -27,6 +27,81 @@ struct CrawlStats {
     }
 }
 
+final class LogBuffer: ObservableObject {
+    @Published var entries: [LogEntry] = []
+    @Published var lastEntryId: UUID? = nil
+    
+    private var pendingEntries: [LogEntry] = []
+    private let lock = NSLock()
+    private var timer: Timer? = nil
+    private let maxEntries = 1500
+    
+    init() {
+        let initialMsg = LocalizationManager.shared.currentLanguage == .de
+            ? "Konsole bereit. Bitte geben Sie oben die Parameter ein und klicken Sie auf Start."
+            : "Console ready. Please configure parameters and click Start."
+        let entry = LogEntry(timestamp: currentTimeString(), message: initialMsg, type: .system)
+        self.entries = [entry]
+        self.lastEntryId = entry.id
+        
+        DispatchQueue.main.async { [weak self] in
+            self?.timer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
+                self?.flush()
+            }
+        }
+    }
+    
+    deinit {
+        timer?.invalidate()
+    }
+    
+    func append(_ entry: LogEntry) {
+        lock.lock()
+        pendingEntries.append(entry)
+        lock.unlock()
+    }
+    
+    func append(message: String, type: LogEntry.LogType) {
+        append(LogEntry(timestamp: currentTimeString(), message: message, type: type))
+    }
+    
+    func clear(message: String? = nil) {
+        lock.lock()
+        pendingEntries.removeAll()
+        lock.unlock()
+        
+        DispatchQueue.main.async {
+            if let msg = message {
+                let entry = LogEntry(timestamp: currentTimeString(), message: msg, type: .system)
+                self.entries = [entry]
+                self.lastEntryId = entry.id
+            } else {
+                self.entries = []
+                self.lastEntryId = nil
+            }
+        }
+    }
+    
+    func flush() {
+        lock.lock()
+        guard !pendingEntries.isEmpty else {
+            lock.unlock()
+            return
+        }
+        let toAdd = pendingEntries
+        pendingEntries.removeAll()
+        lock.unlock()
+        
+        var current = entries
+        current.append(contentsOf: toAdd)
+        if current.count > maxEntries {
+            current.removeFirst(current.count - maxEntries)
+        }
+        self.entries = current
+        self.lastEntryId = current.last?.id
+    }
+}
+
 struct ContentView: View {
     @ObservedObject private var langManager = LocalizationManager.shared
     
@@ -63,13 +138,11 @@ struct ContentView: View {
     
     // Process variables
     @State private var isCrawling = false
+    @State private var isCancelling = false
     @State private var stats = CrawlStats()
-    @State private var logs: [LogEntry] = [
-        LogEntry(timestamp: currentTimeString(), message: LocalizationManager.shared.currentLanguage == .de ? "Konsole bereit. Bitte geben Sie oben die Parameter ein und klicken Sie auf Start." : "Console ready. Please configure parameters and click Start.", type: .system)
-    ]
+    @StateObject private var logBuffer = LogBuffer()
     @State private var progressWidth: Double = 0.0
     @State private var activeCrawler: Crawler? = nil
-    @State private var scrollWorkItem: DispatchWorkItem? = nil
     @State private var showHelpSheet = false
     @State private var showResetHistorySheet = false
     
@@ -564,14 +637,21 @@ struct ContentView: View {
                             .tint(.orange)
                             
                             Button(action: cancelCrawlingJob) {
-                                HStack {
-                                    Image(systemName: "square.fill")
-                                    Text(loc("Abbrechen", "Cancel"))
+                                HStack(spacing: 6) {
+                                    if isCancelling {
+                                        ProgressView()
+                                            .controlSize(.small)
+                                        Text(loc("Bricht ab...", "Cancelling..."))
+                                    } else {
+                                        Image(systemName: "square.fill")
+                                        Text(loc("Abbrechen", "Cancel"))
+                                    }
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 30)
                             }
                             .buttonStyle(.borderedProminent)
                             .tint(.red)
+                            .disabled(isCancelling)
                         }
                     }
                 }
@@ -581,9 +661,36 @@ struct ContentView: View {
             
             // Right Column: Dashboard & Logs
             VStack(alignment: .leading, spacing: 20) {
-                Text(loc("Dashboard", "Dashboard"))
-                    .font(.title2)
-                    .fontWeight(.bold)
+                HStack(alignment: .center, spacing: 10) {
+                    Text(loc("Dashboard", "Dashboard"))
+                        .font(.title2)
+                        .fontWeight(.bold)
+                    
+                    if isCrawling {
+                        HStack(spacing: 6) {
+                            if #available(macOS 14.0, *) {
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .font(.title3)
+                                    .foregroundColor(.accentColor)
+                                    .symbolEffect(.pulse.byLayer, options: .repeating)
+                            } else {
+                                Image(systemName: "arrow.down.circle.fill")
+                                    .font(.title3)
+                                    .foregroundColor(.accentColor)
+                            }
+                            Text(loc("Wird heruntergeladen...", "Downloading..."))
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.accentColor)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.12))
+                        .cornerRadius(8)
+                    }
+                    
+                    Spacer()
+                }
                 
                 // Stats Grid
                 let columns = [
@@ -632,8 +739,8 @@ struct ContentView: View {
                 // Monospace Console
                 ScrollViewReader { proxy in
                     ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(logs) { entry in
+                        LazyVStack(alignment: .leading, spacing: 4) {
+                            ForEach(logBuffer.entries) { entry in
                                 HStack(alignment: .top, spacing: 6) {
                                     Text("[\(entry.timestamp)]")
                                         .font(.system(.caption, design: .monospaced))
@@ -651,14 +758,9 @@ struct ContentView: View {
                     .background(Color(NSColor.textBackgroundColor))
                     .cornerRadius(8)
                     .border(Color.secondary.opacity(0.2), width: 1)
-                    .onChange(of: logs) { oldValue, newValue in
-                        if let last = newValue.last {
-                            scrollWorkItem?.cancel()
-                            let workItem = DispatchWorkItem {
-                                proxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                            scrollWorkItem = workItem
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: workItem)
+                    .onChange(of: logBuffer.lastEntryId) { oldValue, newValue in
+                        if let newId = newValue {
+                            proxy.scrollTo(newId, anchor: .bottom)
                         }
                     }
                 }
@@ -721,7 +823,7 @@ struct ContentView: View {
     }
     
     private func clearLogs() {
-        logs = [LogEntry(timestamp: currentTimeString(), message: loc("Konsole geleert.", "Console cleared."), type: .system)]
+        logBuffer.clear(message: loc("Konsole geleert.", "Console cleared."))
     }
     
     private func startCrawlingJob() {
@@ -795,9 +897,11 @@ struct ContentView: View {
         
         isCrawling = true
         isPaused = false
+        isCancelling = false
         stats = CrawlStats()
-        logs = []
+        logBuffer.clear(message: nil)
         progressWidth = 5.0
+        DockAnimationManager.shared.startAnimation()
         
         let finalStartQuery: String
         if finalIsListMode {
@@ -844,15 +948,15 @@ struct ContentView: View {
         self.activeCrawler = crawler
         
         // Listen to callbacks from crawler
+        let buffer = self.logBuffer
         crawler.onLog = { msg, type in
-            DispatchQueue.main.async {
-                self.addLog(msg, type: type)
-            }
+            buffer.append(message: msg, type: type)
         }
         
         crawler.onStatsUpdate = { newStats in
             DispatchQueue.main.async {
                 self.stats = newStats
+                DockAnimationManager.shared.updateBadge(count: newStats.imagesDownloaded)
                 // Animate progress width
                 if self.progressWidth < 90 {
                     self.progressWidth += 2
@@ -867,7 +971,9 @@ struct ContentView: View {
             DispatchQueue.main.async {
                 self.isCrawling = false
                 self.isPaused = false
+                self.isCancelling = false
                 self.progressWidth = 100.0
+                DockAnimationManager.shared.stopAnimation()
                 if crawler.isCancelled {
                     self.addLog(loc("Crawler vom Benutzer abgebrochen.", "Crawler cancelled by user."), type: .warning)
                 } else if crawler.hasFailed {
@@ -893,14 +999,15 @@ struct ContentView: View {
     }
     
     private func cancelCrawlingJob() {
-        if let crawler = activeCrawler {
-            addLog(loc("Abbruch-Signal gesendet...", "Cancellation signal sent..."), type: .info)
-            crawler.cancel()
-        }
+        guard !isCancelling else { return }
+        isCancelling = true
+        addLog(loc("Abbruch-Signal gesendet... Bitte warten...", "Cancellation signal sent... Please wait..."), type: .info)
+        activeCrawler?.cancel()
+        DockAnimationManager.shared.stopAnimation()
     }
     
     private func addLog(_ message: String, type: LogEntry.LogType) {
-        logs.append(LogEntry(timestamp: currentTimeString(), message: message, type: type))
+        logBuffer.append(message: message, type: type)
     }
     
     private func colorForLog(_ type: LogEntry.LogType) -> Color {

@@ -78,7 +78,14 @@ actor DownloadTracker {
         return stats
     }
     
-    private func notifyStats() {
+    private var lastNotificationTime: TimeInterval = 0
+    
+    private func notifyStats(force: Bool = false) {
+        let now = Date().timeIntervalSince1970
+        if !force && now - lastNotificationTime < 0.15 {
+            return
+        }
+        lastNotificationTime = now
         let current = stats
         onStatsUpdate?(current)
     }
@@ -161,10 +168,37 @@ class Crawler: ObservableObject {
         self.maxConcurrentAudioDownloads = maxConcurrentAudioDownloads
     }
     
+    // Active process tracking for immediate termination on cancel
+    private var activeProcesses = [Process]()
+    private let processLock = NSLock()
+    
     func cancel() {
         isCancelled = true
         isPaused = false // Resume if paused to exit cleanly
+        processLock.lock()
+        for proc in activeProcesses {
+            if proc.isRunning {
+                proc.terminate()
+            }
+        }
+        activeProcesses.removeAll()
+        processLock.unlock()
         log("Crawler-Abbruch angefordert...", type: .warning)
+    }
+    
+    @discardableResult
+    private func registerActiveProcess(_ task: Process) -> Bool {
+        processLock.lock()
+        defer { processLock.unlock() }
+        if isCancelled { return false }
+        activeProcesses.append(task)
+        return true
+    }
+    
+    private func unregisterActiveProcess(_ task: Process) {
+        processLock.lock()
+        defer { processLock.unlock() }
+        activeProcesses.removeAll { $0 === task }
     }
     
     func pause() {
@@ -1319,8 +1353,17 @@ class Crawler: ObservableObject {
         let fileHandle = pipe.fileHandleForReading
         
         do {
+            guard registerActiveProcess(task) else {
+                return false
+            }
+            
+            defer {
+                unregisterActiveProcess(task)
+            }
+            
             try task.run()
             
+            var lastProgressLogTime: TimeInterval = 0
             while task.isRunning {
                 if isCancelled {
                     task.terminate()
@@ -1338,6 +1381,12 @@ class Crawler: ObservableObject {
                                 log("[yt-dlp-Fehler] \(trimmed)", type: .error)
                             } else if trimmed.contains("WARNING:") {
                                 log("[yt-dlp-Warnung] \(trimmed)", type: .warning)
+                            } else if trimmed.hasPrefix("[download]") && trimmed.contains("%") {
+                                let now = Date().timeIntervalSince1970
+                                if trimmed.contains("100%") || now - lastProgressLogTime > 1.5 {
+                                    lastProgressLogTime = now
+                                    log("[yt-dlp] \(trimmed)", type: .ytdlp)
+                                }
                             } else {
                                 log("[yt-dlp] \(trimmed)", type: .ytdlp)
                             }
