@@ -373,51 +373,6 @@ class Crawler: ObservableObject {
                 continue
             }
             
-            // Check if next items in queue are video platforms
-            if downloadVideos, let first = queue.first, (self.isVideoPlatform(url: first.url) || self.hasVideoExtension(url: first.url)) {
-                var videoBatch = [URL]()
-                while !queue.isEmpty, let next = queue.first, (self.isVideoPlatform(url: next.url) || self.hasVideoExtension(url: next.url)) {
-                    videoBatch.append(queue.removeFirst().url)
-                }
-                
-                log("Verarbeite \(videoBatch.count) gefundene Video-Links (max. \(maxConcurrentVideoDownloads) gleichzeitig)...", type: .info)
-                let concurrency = max(1, maxConcurrentVideoDownloads)
-                await withTaskGroup(of: Void.self) { group in
-                    var activeCount = 0
-                    for vUrl in videoBatch {
-                        if self.isCancelled { break }
-                        while self.isPaused && !self.isCancelled {
-                            try? await Task.sleep(nanoseconds: 200_000_000)
-                        }
-                        if self.isCancelled { break }
-                        
-                        if activeCount >= concurrency {
-                            await group.next()
-                            activeCount -= 1
-                        }
-                        
-                        if self.isCancelled { break }
-                        
-                        let urlStr = vUrl.absoluteString
-                        if visitedUrls.contains(urlStr) { continue }
-                        visitedUrls.insert(urlStr)
-                        
-                        activeCount += 1
-                        group.addTask {
-                            await self.processVideoItem(
-                                url: vUrl,
-                                jobTargetFolder: jobTargetFolder,
-                                tracker: tracker
-                            )
-                        }
-                    }
-                    await group.waitForAll()
-                }
-                self.stats = await tracker.getStats()
-                self.triggerStatsUpdate()
-                continue
-            }
-            
             let current = queue.removeFirst()
             let url = current.url
             let depth = current.depth
@@ -428,27 +383,30 @@ class Crawler: ObservableObject {
             log("Verarbeite URL: \(url.absoluteString) (Tiefe: \(depth)/\(maxDepth))", type: .info)
             await tracker.recordPageCrawled()
             
-            let isAudioPlatform = downloadAudios && self.isAudioPlatform(url: url)
-            let isVideoPlatform = downloadVideos && (isListMode || self.isVideoPlatform(url: url))
-            if isVideoPlatform || isAudioPlatform {
-                await processMediaPlatformItem(url: url, jobTargetFolder: jobTargetFolder, tracker: tracker, isAudioOnly: isAudioPlatform && !downloadVideos)
-                self.stats = await tracker.getStats()
-                self.triggerStatsUpdate()
-                continue
-            }
-            
             let isDirectAudio = downloadAudios && self.hasAudioExtension(url: url)
             let isDirectDoc = downloadDocuments && self.hasDocumentExtension(url: url)
             let isDirectImg = downloadImages && self.hasImageExtension(url: url)
             let isDirectVid = downloadVideos && self.hasVideoExtension(url: url)
             
-            if isDirectAudio || isDirectDoc || isDirectImg || (isDirectVid && !isVideoPlatform) {
+            if isDirectAudio || isDirectDoc || isDirectImg || isDirectVid {
                 log("Direkte Datei-URL erkannt: \(url.absoluteString)", type: .info)
                 await tracker.recordFound(count: 1)
                 await downloadFile(url: url, targetFolder: jobTargetFolder, refererUrl: nil, tracker: tracker)
                 self.stats = await tracker.getStats()
                 self.triggerStatsUpdate()
                 continue
+            }
+            
+            let isAudioPlatform = downloadAudios && self.isAudioPlatformItem(url: url)
+            let isVideoPlatform = downloadVideos && (isListMode || self.isVideoPlatformItem(url: url))
+            if isVideoPlatform || isAudioPlatform {
+                let audioOnly = isAudioPlatform || !downloadVideos
+                await processMediaPlatformItem(url: url, jobTargetFolder: jobTargetFolder, tracker: tracker, isAudioOnly: audioOnly)
+                self.stats = await tracker.getStats()
+                self.triggerStatsUpdate()
+                if depth >= maxDepth {
+                    continue
+                }
             }
             
             do {
@@ -526,8 +484,10 @@ class Crawler: ObservableObject {
                 }
                 
             } catch {
-                log("Fehler bei URL \(url.absoluteString): \(error.localizedDescription)", type: .error)
-                await tracker.recordError()
+                if !isVideoPlatform && !isAudioPlatform {
+                    log("Fehler bei URL \(url.absoluteString): \(error.localizedDescription)", type: .error)
+                    await tracker.recordError()
+                }
             }
             
             self.stats = await tracker.getStats()
@@ -543,13 +503,15 @@ class Crawler: ObservableObject {
     private func fetchHTML(from url: URL) async throws -> String {
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
+        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        request.setValue("de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7", forHTTPHeaderField: "Accept-Language")
         
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let httpResponse = response as? HTTPURLResponse else {
             throw NSError(domain: "Crawler", code: 1, userInfo: [NSLocalizedDescriptionKey: "Ungültige HTTP-Antwort"])
         }
         
-        guard httpResponse.statusCode == 200 else {
+        guard (200...299).contains(httpResponse.statusCode) else {
             throw NSError(domain: "Crawler", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP-Fehler \(httpResponse.statusCode)"])
         }
         
@@ -682,7 +644,8 @@ class Crawler: ObservableObject {
         
         // Resolve relative URLs
         var resolvedUrls = [URL]()
-        for urlStr in urls {
+        for rawUrlStr in urls {
+            let urlStr = rawUrlStr.replacingOccurrences(of: "&amp;", with: "&")
             if urlStr.hasPrefix("data:") { continue }
             if let resolved = URL(string: urlStr, relativeTo: baseUrl) {
                 resolvedUrls.append(resolved.absoluteURL)
@@ -693,20 +656,17 @@ class Crawler: ObservableObject {
     }
     
     private func parseLinks(from html: String, baseUrl: URL) -> [URL] {
-        var hrefs = extractMatches(in: html, regex: "<a[^>]+href=[\"']([^\"']+)[\"']")
-        if downloadVideos {
-            let iframeSrcs = extractMatches(in: html, regex: "<iframe[^>]+src=[\"']([^\"']+)[\"']")
-            hrefs.append(contentsOf: iframeSrcs)
-        }
+        let hrefs = extractMatches(in: html, regex: "<a[^>]+href=[\"']([^\"']+)[\"']")
         var urls = Set<URL>()
-        for href in hrefs {
+        for rawHref in hrefs {
+            let href = rawHref.replacingOccurrences(of: "&amp;", with: "&")
             if href.hasPrefix("#") || href.hasPrefix("javascript:") || href.hasPrefix("mailto:") || href.hasPrefix("tel:") { continue }
             if let resolved = URL(string: href, relativeTo: baseUrl) {
                 var components = URLComponents(url: resolved.absoluteURL, resolvingAgainstBaseURL: false)
                 components?.fragment = nil
                 if let cleanUrl = components?.url {
                     // Do not follow links that are direct media or document downloads
-                    if self.hasImageExtension(url: cleanUrl) || self.hasDocumentExtension(url: cleanUrl) || self.hasAudioExtension(url: cleanUrl) || (self.hasVideoExtension(url: cleanUrl) && !self.isVideoPlatform(url: cleanUrl)) {
+                    if self.hasImageExtension(url: cleanUrl) || self.hasDocumentExtension(url: cleanUrl) || self.hasAudioExtension(url: cleanUrl) || self.hasVideoExtension(url: cleanUrl) {
                         continue
                     }
                     urls.insert(cleanUrl)
@@ -850,6 +810,15 @@ class Crawler: ObservableObject {
         let isVideoPlatform = downloadVideos && (self.isVideoPlatform(url: url) || self.hasVideoExtension(url: url))
         if isVideoPlatform {
             let success = await downloadWithYtdlp(url: url, targetFolder: targetFolder, refererUrl: refererUrl)
+            if success {
+                await tracker.recordVideoSuccess(url: urlStr)
+                return
+            }
+        }
+        
+        let isAudioPlatform = downloadAudios && self.isAudioPlatformItem(url: url)
+        if isAudioPlatform {
+            let success = await downloadWithYtdlp(url: url, targetFolder: targetFolder, refererUrl: refererUrl, isAudioOnly: true)
             if success {
                 await tracker.recordVideoSuccess(url: urlStr)
                 return
@@ -1080,7 +1049,12 @@ class Crawler: ObservableObject {
         guard let h1 = host1?.lowercased(), let h2 = host2?.lowercased() else { return false }
         let clean1 = h1.hasPrefix("www.") ? String(h1.dropFirst(4)) : h1
         let clean2 = h2.hasPrefix("www.") ? String(h2.dropFirst(4)) : h2
-        return clean1 == clean2
+        if clean1 == clean2 { return true }
+        if clean1.hasSuffix("." + clean2) || clean2.hasSuffix("." + clean1) { return true }
+        let isArd1 = clean1.contains("ardsounds.de") || clean1.contains("ardaudiothek.de")
+        let isArd2 = clean2.contains("ardsounds.de") || clean2.contains("ardaudiothek.de")
+        if isArd1 && isArd2 { return true }
+        return false
     }
     
     private func hasVideoExtension(url: URL) -> Bool {
@@ -1139,7 +1113,7 @@ class Crawler: ObservableObject {
         return false
     }
     
-    private func isAudioPlatform(url: URL) -> Bool {
+    private func isAudioPlatformDomain(url: URL) -> Bool {
         let host = url.host?.lowercased() ?? ""
         let domains = [
             "ardsounds.de", "ardaudiothek.de", "soundcloud.com", "audiomack.com",
@@ -1148,37 +1122,75 @@ class Crawler: ObservableObject {
         return domains.contains { host == $0 || host.hasSuffix("." + $0) }
     }
     
-    private func isVideoPlatform(url: URL) -> Bool {
+    private func isAudioPlatformItem(url: URL) -> Bool {
+        guard isAudioPlatformDomain(url: url) else { return false }
         let host = url.host?.lowercased() ?? ""
         let path = url.path.lowercased()
         let urlStr = url.absoluteString.lowercased()
+        let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if cleanPath.isEmpty { return false }
         
+        if host.contains("ardsounds.de") || host.contains("ardaudiothek.de") {
+            return urlStr.contains("/episode/") || urlStr.contains("urn:ard:episode:") || urlStr.contains("/sendung/") || urlStr.contains("urn:ard:show:") || urlStr.contains("urn:ard:")
+        }
+        if host.contains("soundcloud.com") {
+            let segments = cleanPath.components(separatedBy: "/").filter { !$0.isEmpty }
+            let nonItemPrefixes = ["discover", "stream", "search", "upload", "popular", "charts", "pages", "tags", "people", "messages", "settings", "terms-of-use", "mobile", "you", "stations", "feed"]
+            return segments.count >= 2 && !nonItemPrefixes.contains(segments[0])
+        }
+        if host.contains("bandcamp.com") {
+            return urlStr.contains("/track/") || urlStr.contains("/album/")
+        }
+        if host.contains("podcasts.apple.com") {
+            return urlStr.contains("/podcast/") || urlStr.contains("id")
+        }
+        if host.contains("podcast.de") {
+            return urlStr.contains("/podcast/") || urlStr.contains("/episode/")
+        }
+        if host.contains("mixcloud.com") || host.contains("audiomack.com") || host.contains("deezer.com") {
+            let segments = cleanPath.components(separatedBy: "/").filter { !$0.isEmpty }
+            return segments.count >= 2
+        }
+        return !cleanPath.isEmpty
+    }
+    
+    private func isAudioPlatform(url: URL) -> Bool {
+        return isAudioPlatformItem(url: url)
+    }
+    
+    private func isVideoPlatformDomain(url: URL) -> Bool {
+        let host = url.host?.lowercased() ?? ""
         let domains = [
             "youtube.com", "youtu.be", "vimeo.com", "dailymotion.com", "twitch.tv", "tiktok.com", "x.com", "twitter.com",
             "facebook.com", "instagram.com", "reddit.com", "linkedin.com", "tumblr.com", "pinterest.com", "telegram.org",
             "bilibili.com", "bitchute.com", "rumble.com", "rutube.ru", "odysee.com", "streamable.com", "wistia.com",
-            "soundcloud.com", "audiomack.com", "bandcamp.com", "mixcloud.com", "9gag.com", "imgur.com", "newgrounds.com",
-            "ardsounds.de", "ardaudiothek.de", "podcast.de", "podcasts.apple.com",
+            "9gag.com", "imgur.com", "newgrounds.com",
             "3sat.de", "ardmediathek.de", "arte.tv", "br.de", "ndr.de", "mdr.de", "wdr.de", "phoenix.de", "tagesschau.de",
             "zdf.de", "servus.com", "kika.de", "rtl.de", "rtl.lu", "n-tv.de", "orf.at", "playsuisse.ch", "srf.ch", 
             "rts.ch", "rsi.ch", "rtve.es", "raiplay.it", "1tv.ru", "bbc.co.uk", "bbc.com", "itv.com", "cbsnews.com",
             "cnn.com", "foxnews.com", "nbcnews.com", "abcnews.go.com", "reuters.com", "bloomberg.com", "sbs.com.au", "abc.net.au",
             "heavyfetish.com"
         ]
-        
-        let matchesHost = domains.contains { host == $0 || host.hasSuffix("." + $0) }
-        if !matchesHost { return false }
+        return domains.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+    
+    private func isVideoPlatformItem(url: URL) -> Bool {
+        guard isVideoPlatformDomain(url: url) else { return false }
+        let host = url.host?.lowercased() ?? ""
+        let path = url.path.lowercased()
+        let urlStr = url.absoluteString.lowercased()
+        let cleanPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if cleanPath.isEmpty { return false }
         
         if host.contains("youtube.com") || host.contains("youtu.be") {
-            return urlStr.contains("/watch") || urlStr.contains("youtu.be/") || urlStr.contains("/embed/") || urlStr.contains("/v/") || urlStr.contains("/shorts/") || urlStr.contains("/playlist") || urlStr.contains("/@") || urlStr.contains("/channel/") || urlStr.contains("/c/") || urlStr.contains("/user/") || urlStr.contains("/videos") || urlStr.contains("/streams") || urlStr.contains("/podcasts")
+            return urlStr.contains("/watch") || urlStr.contains("youtu.be/") || urlStr.contains("/embed/") || urlStr.contains("/v/") || urlStr.contains("/shorts/")
         }
         if host.contains("vimeo.com") {
             if urlStr.contains("/video/") { return true }
-            let trimmedPath = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            if !trimmedPath.isEmpty && trimmedPath.allSatisfy({ $0.isNumber }) {
+            if !cleanPath.isEmpty && cleanPath.allSatisfy({ $0.isNumber }) {
                 return true
             }
-            return urlStr.contains("/album/") || urlStr.contains("/showcase/") || urlStr.contains("/channels/") || urlStr.contains("/groups/") || path.components(separatedBy: "/").count == 2
+            return false
         }
         if host.contains("dailymotion.com") || host.contains("dai.ly") {
             return urlStr.contains("/video/") || host.contains("dai.ly")
@@ -1198,11 +1210,28 @@ class Crawler: ObservableObject {
         if host.contains("instagram.com") {
             return urlStr.contains("/p/") || urlStr.contains("/reel/") || urlStr.contains("/tv/")
         }
+        if host.contains("bilibili.com") {
+            return urlStr.contains("/video/")
+        }
         if host.contains("heavyfetish.com") {
             return urlStr.contains("/videos/")
         }
+        if host.contains("ardmediathek.de") {
+            return urlStr.contains("/video/") || urlStr.contains("urn:ard:video:") || urlStr.contains("/player/")
+        }
+        if host.contains("zdf.de") {
+            return urlStr.contains("/video/") || urlStr.contains("/player/") || urlStr.contains("/beitrag/")
+        }
+        if host.contains("arte.tv") {
+            return urlStr.contains("/videos/") || urlStr.contains("/player/")
+        }
         
-        return true
+        let videoKeywords = ["/video/", "/videos/", "/player/", "/play/", "/watch/", "/clip/", "/beitrag/"]
+        return videoKeywords.contains { urlStr.contains($0) }
+    }
+    
+    private func isVideoPlatform(url: URL) -> Bool {
+        return isVideoPlatformItem(url: url)
     }
     
     private func findYtdlpPath() -> String? {
@@ -1338,9 +1367,8 @@ class Crawler: ObservableObject {
             task.waitUntilExit()
             
             if task.terminationStatus == 0 {
-                log("Video erfolgreich über yt-dlp heruntergeladen.", type: .success)
-                stats.imagesDownloaded += 1
-                triggerStatsUpdate()
+                let itemLabel = isAudioOnly ? "Audio" : "Video"
+                log("\(itemLabel) erfolgreich über yt-dlp heruntergeladen.", type: .success)
                 return true
             } else {
                 log("yt-dlp beendete mit Fehlercode \(task.terminationStatus).", type: .error)
