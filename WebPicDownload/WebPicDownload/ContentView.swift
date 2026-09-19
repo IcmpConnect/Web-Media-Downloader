@@ -31,6 +31,7 @@ struct ContentView: View {
     @ObservedObject private var langManager = LocalizationManager.shared
     
     // State variables
+    @AppStorage("last_target_folder") private var storedTargetFolder = ""
     @State private var startUrl = ""
     @State private var targetFolder = ""
     @State private var minSizeKB: Double = 50
@@ -512,8 +513,8 @@ struct ContentView: View {
                                     .font(.subheadline)
                                 }
                                 .buttonStyle(.link)
-                                .disabled(isCrawling || targetFolder.isEmpty)
-                                .help(targetFolder.isEmpty ? loc("Wählen Sie zuerst einen Zielordner aus", "Please select a destination folder first") : loc("Bereinigt oder löscht die Liste bereits geladener Dateien", "Cleans or resets the history of downloaded files"))
+                                .disabled(isCrawling)
+                                .help(loc("Bereinigt oder löscht die Liste bereits geladener Dateien", "Cleans or resets the history of downloaded files"))
                             }
                             .padding(.leading, 20)
                             .padding(.top, 2)
@@ -667,14 +668,20 @@ struct ContentView: View {
             .frame(minWidth: 400)
         }
         .onAppear {
+            if targetFolder.isEmpty && !storedTargetFolder.isEmpty {
+                targetFolder = storedTargetFolder
+            }
             checkDependencies()
+        }
+        .onChange(of: targetFolder) { _, newValue in
+            storedTargetFolder = newValue
         }
         .sheet(isPresented: $showHelpSheet) {
             HelpView(isPresented: $showHelpSheet)
         }
         .sheet(isPresented: $showResetHistorySheet) {
             ResetHistorySheet(
-                targetFolder: targetFolder,
+                targetFolder: $targetFolder,
                 isPresented: $showResetHistorySheet,
                 onResetPerformed: { msg in
                     addLog(msg, type: .info)
@@ -1056,7 +1063,7 @@ struct StatBox: View {
 // MARK: - Reset History Sheet View
 
 struct ResetHistorySheet: View {
-    let targetFolder: String
+    @Binding var targetFolder: String
     @Binding var isPresented: Bool
     var onResetPerformed: ((String) -> Void)?
     
@@ -1108,6 +1115,18 @@ struct ResetHistorySheet: View {
     private var folderURL: URL {
         URL(fileURLWithPath: targetFolder)
     }
+
+    private func selectFolderInSheet() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        if panel.runModal() == .OK {
+            self.targetFolder = panel.url?.path ?? ""
+            loadSummary()
+        }
+    }
     
     var body: some View {
         VStack(spacing: 0) {
@@ -1141,25 +1160,50 @@ struct ResetHistorySheet: View {
                 VStack(alignment: .leading, spacing: 20) {
                     // Card 1: Target Folder & Current Status
                     VStack(alignment: .leading, spacing: 12) {
-                        HStack(alignment: .top, spacing: 10) {
+                        HStack(alignment: .center, spacing: 12) {
                             Image(systemName: "folder.fill")
-                                .font(.title3)
+                                .font(.title2)
                                 .foregroundColor(.accentColor)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(loc("Zielordner:", "Destination Folder:"))
                                     .font(.headline)
-                                Text(targetFolder)
-                                    .font(.system(.body, design: .monospaced))
-                                    .foregroundColor(.primary)
-                                    .textSelection(.enabled)
-                                    .lineLimit(2)
+                                if targetFolder.isEmpty {
+                                    Text(loc("Kein Zielordner ausgewählt", "No destination folder selected"))
+                                        .font(.body)
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                } else {
+                                    Text(targetFolder)
+                                        .font(.system(.body, design: .monospaced))
+                                        .foregroundColor(.primary)
+                                        .textSelection(.enabled)
+                                        .lineLimit(2)
+                                }
                             }
+                            Spacer()
+                            Button(action: selectFolderInSheet) {
+                                HStack(spacing: 5) {
+                                    Image(systemName: "folder.badge.gearshape")
+                                    Text(targetFolder.isEmpty ? loc("Auswählen...", "Select...") : loc("Ändern...", "Change..."))
+                                }
+                            }
+                            .controlSize(.regular)
                         }
                         
                         Divider()
                             .padding(.vertical, 2)
                         
-                        if summary.exists && summary.totalRecords > 0 {
+                        if targetFolder.isEmpty {
+                            HStack(spacing: 10) {
+                                Image(systemName: "info.circle.fill")
+                                    .font(.title3)
+                                    .foregroundColor(.orange)
+                                Text(loc("Bitte wählen Sie über 'Auswählen...' einen Ordner aus, dessen Merkliste Sie prüfen oder zurücksetzen möchten.", "Please click 'Select...' to choose a folder whose history you want to inspect or reset."))
+                                    .font(.body)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 6)
+                        } else if summary.exists && summary.totalRecords > 0 {
                             HStack(spacing: 28) {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(loc("Gespeicherte Einträge", "Saved Records"))
@@ -1347,7 +1391,7 @@ struct ResetHistorySheet: View {
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
                 .tint(resetMode == .all ? .red : .orange)
-                .disabled(!summary.exists || summary.totalRecords == 0 || previewDeleted == 0)
+                .disabled(targetFolder.isEmpty || !summary.exists || summary.totalRecords == 0 || previewDeleted == 0)
             }
             .padding(.horizontal, 24)
             .padding(.vertical, 16)
