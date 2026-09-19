@@ -90,4 +90,6 @@ open WebPicDownload/WebPicDownload.xcodeproj
 
 ## 📄 Lizenz
 
-Dieses Projekt ist für den privaten und professionellen Gebrauch lizenziert.
+Dieses Projekt ist unter der [MIT-Lizenz](LICENSE) lizenziert – freie Verwendung für private und professionelle Zwecke.
+
+Copyright © 2026 Jens Schneider ([IcmpConnect](https://github.com/IcmpConnect)). Alle Rechte vorbehalten.

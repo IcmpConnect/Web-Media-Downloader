@@ -16,7 +16,8 @@ let package = Package(
             dependencies: [],
             path: "Sources",
             resources: [
-                .process("app_icon.png")
+                .process("app_icon.png"),
+                .process("Credits.rtf")
             ]
         )
     ]
