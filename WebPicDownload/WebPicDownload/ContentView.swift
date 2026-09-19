@@ -1112,105 +1112,114 @@ struct ResetHistorySheet: View {
     var body: some View {
         VStack(spacing: 0) {
             // Header Bar
-            HStack(spacing: 12) {
+            HStack(spacing: 16) {
                 Image(systemName: "arrow.counterclockwise.circle.fill")
-                    .font(.system(size: 28))
+                    .font(.system(size: 34))
                     .foregroundColor(.accentColor)
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(loc("Merkliste & Download-Verlauf verwalten", "Manage & Reset Download History"))
-                        .font(.headline)
+                        .font(.title2)
+                        .fontWeight(.bold)
                     Text(loc("Bereinigen oder löschen Sie gemerkte URLs und Dateiinhalte im Zielordner.", "Clean up or delete remembered URLs and file contents in the destination folder."))
-                        .font(.caption)
+                        .font(.subheadline)
                         .foregroundColor(.secondary)
                 }
                 Spacer()
                 Button(loc("Schließen", "Close")) {
                     isPresented = false
                 }
+                .controlSize(.regular)
                 .keyboardShortcut(.cancelAction)
             }
-            .padding(18)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
             .background(Color(NSColor.windowBackgroundColor))
             
             Divider()
             
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+            ScrollView(.vertical, showsIndicators: true) {
+                VStack(alignment: .leading, spacing: 20) {
                     // Card 1: Target Folder & Current Status
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(alignment: .top, spacing: 10) {
                             Image(systemName: "folder.fill")
-                                .foregroundColor(.secondary)
-                            Text(loc("Zielordner: ", "Destination Folder: "))
-                                .fontWeight(.semibold)
-                            Text(targetFolder)
-                                .font(.system(.body, design: .monospaced))
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .foregroundColor(.secondary)
+                                .font(.title3)
+                                .foregroundColor(.accentColor)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(loc("Zielordner:", "Destination Folder:"))
+                                    .font(.headline)
+                                Text(targetFolder)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundColor(.primary)
+                                    .textSelection(.enabled)
+                                    .lineLimit(2)
+                            }
                         }
-                        .font(.subheadline)
                         
                         Divider()
+                            .padding(.vertical, 2)
                         
                         if summary.exists && summary.totalRecords > 0 {
-                            HStack(spacing: 20) {
-                                VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 28) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     Text(loc("Gespeicherte Einträge", "Saved Records"))
-                                        .font(.caption)
+                                        .font(.subheadline)
                                         .foregroundColor(.secondary)
                                     Text("\(summary.totalRecords)")
-                                        .font(.title3)
+                                        .font(.title)
                                         .fontWeight(.bold)
                                         .foregroundColor(.accentColor)
                                 }
                                 
                                 Divider()
-                                    .frame(height: 30)
+                                    .frame(height: 38)
                                 
-                                VStack(alignment: .leading, spacing: 3) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     Text(loc("Ältester Download", "Oldest Download"))
-                                        .font(.caption)
+                                        .font(.subheadline)
                                         .foregroundColor(.secondary)
                                     Text(formatDate(summary.oldestDate))
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
+                                        .font(.body)
+                                        .fontWeight(.semibold)
                                 }
                                 
                                 Divider()
-                                    .frame(height: 30)
+                                    .frame(height: 38)
                                 
-                                VStack(alignment: .leading, spacing: 3) {
+                                VStack(alignment: .leading, spacing: 4) {
                                     Text(loc("Neuester Download", "Newest Download"))
-                                        .font(.caption)
+                                        .font(.subheadline)
                                         .foregroundColor(.secondary)
                                     Text(formatDate(summary.newestDate))
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
+                                        .font(.body)
+                                        .fontWeight(.semibold)
                                 }
+                                
+                                Spacer()
                             }
                         } else {
-                            HStack(spacing: 8) {
-                                Image(systemName: "info.circle")
+                            HStack(spacing: 10) {
+                                Image(systemName: "info.circle.fill")
+                                    .font(.title3)
                                     .foregroundColor(.orange)
                                 Text(loc("In diesem Zielordner ist aktuell noch keine Merkliste (.download_history.json) vorhanden.", "No download history (.download_history.json) found in this destination folder yet."))
-                                    .font(.subheadline)
+                                    .font(.body)
                                     .foregroundColor(.secondary)
                             }
-                            .padding(.vertical, 4)
+                            .padding(.vertical, 6)
                         }
                     }
-                    .padding(14)
+                    .padding(18)
                     .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-                    .cornerRadius(10)
+                    .cornerRadius(12)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 10)
+                        RoundedRectangle(cornerRadius: 12)
                             .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
                     )
                     
                     if summary.exists && summary.totalRecords > 0 {
                         // Card 2: Method selection
-                        VStack(alignment: .leading, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 16) {
                             Text(loc("Löschmethode auswählen", "Select Reset Method"))
                                 .font(.headline)
                             
@@ -1220,13 +1229,13 @@ struct ResetHistorySheet: View {
                                 }
                             }
                             .pickerStyle(.segmented)
+                            .controlSize(.regular)
                             .onChange(of: resetMode) { _, _ in updatePreview() }
                             
                             if resetMode == .byDate {
-                                VStack(alignment: .leading, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 14) {
                                     Text(loc("Zeitraum auswählen:", "Select Timeframe:"))
-                                        .font(.subheadline)
-                                        .fontWeight(.semibold)
+                                        .font(.headline)
                                     
                                     Picker("", selection: $quickInterval) {
                                         ForEach(QuickInterval.allCases) { interval in
@@ -1234,6 +1243,7 @@ struct ResetHistorySheet: View {
                                         }
                                     }
                                     .pickerStyle(.segmented)
+                                    .controlSize(.regular)
                                     .onChange(of: quickInterval) { _, _ in updatePreview() }
                                     
                                     if quickInterval == .custom {
@@ -1242,18 +1252,20 @@ struct ResetHistorySheet: View {
                                             selection: $customDate,
                                             displayedComponents: [.date, .hourAndMinute]
                                         )
+                                        .font(.body)
                                         .datePickerStyle(.compact)
                                         .onChange(of: customDate) { _, _ in updatePreview() }
-                                        .padding(.vertical, 2)
+                                        .padding(.vertical, 4)
                                     }
                                     
-                                    VStack(alignment: .leading, spacing: 6) {
+                                    VStack(alignment: .leading, spacing: 8) {
                                         Text(loc("Filter-Richtung:", "Filter Direction:"))
-                                            .font(.subheadline)
-                                            .fontWeight(.semibold)
+                                            .font(.headline)
                                         Picker("", selection: $direction) {
                                             ForEach(DateResetDirection.allCases) { dir in
-                                                Text(dir.title).tag(dir)
+                                                Text(dir.title)
+                                                    .font(.body)
+                                                    .tag(dir)
                                             }
                                         }
                                         .pickerStyle(.radioGroup)
@@ -1262,83 +1274,86 @@ struct ResetHistorySheet: View {
                                     .padding(.top, 4)
                                 }
                             } else {
-                                HStack(spacing: 8) {
+                                HStack(spacing: 12) {
                                     Image(systemName: "exclamationmark.triangle.fill")
+                                        .font(.title2)
                                         .foregroundColor(.red)
                                     Text(loc("Alle gemerkten Downloads in diesem Ordner werden vollständig gelöscht. Bei nachfolgenden Durchläufen werden alle Dateien wieder heruntergeladen.", "All remembered downloads in this folder will be completely erased. Subsequent crawls will re-download all files."))
-                                        .font(.caption)
+                                        .font(.body)
                                         .foregroundColor(.secondary)
                                 }
-                                .padding(.vertical, 4)
+                                .padding(.vertical, 6)
                             }
                         }
-                        .padding(14)
+                        .padding(18)
                         .background(Color(NSColor.controlBackgroundColor).opacity(0.5))
-                        .cornerRadius(10)
+                        .cornerRadius(12)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 10)
+                            RoundedRectangle(cornerRadius: 12)
                                 .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
                         )
                         
                         // Card 3: Preview Box
-                        HStack(spacing: 15) {
+                        HStack(spacing: 16) {
                             Image(systemName: previewDeleted > 0 ? "trash.circle.fill" : "checkmark.circle.fill")
-                                .font(.system(size: 26))
+                                .font(.system(size: 32))
                                 .foregroundColor(previewDeleted > 0 ? .orange : .green)
                             
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: .leading, spacing: 4) {
                                 Text(loc("Vorschau der Bereinigung", "Cleanup Preview"))
-                                    .font(.subheadline)
-                                    .fontWeight(.semibold)
+                                    .font(.headline)
                                 if previewDeleted > 0 {
                                     Text(loc("**\(previewDeleted)** von \(summary.totalRecords) Einträgen werden gelöscht (**\(previewRemaining)** verbleiben in der Merkliste).", "**\(previewDeleted)** of \(summary.totalRecords) entries will be deleted (**\(previewRemaining)** will remain in history)."))
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
+                                        .font(.body)
+                                        .foregroundColor(.primary)
                                 } else {
                                     Text(loc("Keine Einträge entsprechen dem gewählten Zeitraum (0 zu löschen).", "No entries match the selected timeframe (0 to delete)."))
-                                        .font(.caption)
+                                        .font(.body)
                                         .foregroundColor(.secondary)
                                 }
                             }
                             Spacer()
                         }
-                        .padding(12)
-                        .background(Color(NSColor.controlBackgroundColor).opacity(0.3))
-                        .cornerRadius(8)
+                        .padding(16)
+                        .background(Color(NSColor.controlBackgroundColor).opacity(0.4))
+                        .cornerRadius(10)
                         .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                            RoundedRectangle(cornerRadius: 10)
+                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
                         )
                     }
                 }
-                .padding(20)
+                .padding(24)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             
             Divider()
             
             // Bottom Action Bar
-            HStack {
+            HStack(spacing: 12) {
                 Spacer()
                 Button(loc("Abbrechen", "Cancel")) {
                     isPresented = false
                 }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 8)
+                .controlSize(.large)
+                .padding(.horizontal, 4)
                 
                 Button(action: { showConfirmDialog = true }) {
-                    HStack(spacing: 5) {
+                    HStack(spacing: 6) {
                         Image(systemName: resetMode == .all ? "trash.fill" : "arrow.counterclockwise")
                         Text(resetMode == .all ? loc("Vollständig löschen", "Delete Completely") : loc("Ausgewählte Einträge löschen", "Delete Selected Entries"))
                     }
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.large)
                 .tint(resetMode == .all ? .red : .orange)
                 .disabled(!summary.exists || summary.totalRecords == 0 || previewDeleted == 0)
             }
-            .padding(16)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 16)
             .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(minWidth: 540, idealWidth: 580, minHeight: 460, idealHeight: 520)
+        .frame(minWidth: 720, idealWidth: 780, minHeight: 580, idealHeight: 640)
         .onAppear {
             loadSummary()
         }
