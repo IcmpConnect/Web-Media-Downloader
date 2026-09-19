@@ -66,7 +66,8 @@ struct HelpView: View {
                 Image(systemName: "book.pages.fill")
                     .font(.title2)
                     .foregroundColor(.accentColor)
-                Text(loc("WebMediaDownloader – Anleitung & Hilfesystem", "WebMediaDownloader – Help & User Guide"))
+                let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.1.0"
+                Text(loc("WebMediaDownloader v\(appVersion) – Anleitung & Hilfesystem", "WebMediaDownloader v\(appVersion) – Help & User Guide"))
                     .font(.headline)
                 Spacer()
                 
