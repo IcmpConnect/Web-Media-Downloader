@@ -339,7 +339,7 @@ struct HelpView: View {
                     )
                     optionRow(
                         title: isDe ? "Nach Unterseiten strukturieren" : "Organize by Subpages",
-                        desc: isDe ? "Legt für jede durchsuchte Unterseite automatisch einen eigenen, passend benannten Unterordner an." : "Automatically creates dedicated, sanitized subfolders for each crawled subpage."
+                        desc: isDe ? "Legt für jede durchsuchte Unterseite automatisch einen eigenen, passend benannten Unterordner an. Leere Ordner werden dabei automatisch vermieden und nach dem Crawling vollständig bereinigt, falls auf einer Seite keine Dateien geladen wurden." : "Automatically creates dedicated, sanitized subfolders for each crawled subpage. Empty folders are automatically prevented and cleaned up after crawling if no files were downloaded on a page."
                     )
                 }
             }

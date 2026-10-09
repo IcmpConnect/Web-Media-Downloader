@@ -405,8 +405,14 @@ class Crawler: ObservableObject {
                 await group.waitForAll()
             }
             
+            // Clean up empty directories in fast-path
+            cleanEmptyDirectories(at: jobTargetFolder)
+            
             self.stats = await tracker.getStats()
             self.triggerStatsUpdate()
+            if stats.imagesDownloaded == 0 && !FileManager.default.fileExists(atPath: jobTargetFolder.path) {
+                log("Keine Videos heruntergeladen. Leerer Zielordner wurde entfernt.", type: .info)
+            }
             log("Alle Einträge der URL-Liste wurden verarbeitet.", type: .success)
             return
         }
@@ -502,6 +508,11 @@ class Crawler: ObservableObject {
                     await group.waitForAll()
                 }
                 
+                // Clean up pageFolder if it ended up empty
+                if structureByPage && pageFolder != jobTargetFolder {
+                    removeDirectoryIfEmpty(at: pageFolder)
+                }
+                
                 // Follow links if depth < maxDepth
                 if depth < maxDepth {
                     let links = parseLinks(from: html, baseUrl: url)
@@ -540,6 +551,12 @@ class Crawler: ObservableObject {
         
         self.stats = await tracker.getStats()
         self.triggerStatsUpdate()
+        
+        // Clean up empty directories across the entire crawl
+        cleanEmptyDirectories(at: jobTargetFolder)
+        if stats.imagesDownloaded == 0 && !FileManager.default.fileExists(atPath: jobTargetFolder.path) {
+            log("Keine neuen Mediendateien heruntergeladen. Leerer Zielordner wurde entfernt.", type: .info)
+        }
     }
     
     // --- HELPER NETWORKING & PARSING ---
@@ -841,6 +858,11 @@ class Crawler: ObservableObject {
             log("yt-dlp Download fehlgeschlagen oder abgebrochen: \(url.lastPathComponent)", type: .warning)
             await tracker.recordError()
         }
+        
+        // Clean up pageFolder if it ended up empty
+        if structureByPage && pageFolder != jobTargetFolder {
+            removeDirectoryIfEmpty(at: pageFolder)
+        }
     }
     
     private func processVideoItem(url: URL, jobTargetFolder: URL, tracker: DownloadTracker) async {
@@ -864,6 +886,9 @@ class Crawler: ObservableObject {
                 return
             case .skippedMinSize:
                 await tracker.recordSkipped()
+                if structureByPage {
+                    removeDirectoryIfEmpty(at: targetFolder)
+                }
                 return
             case .failed:
                 break
@@ -879,6 +904,9 @@ class Crawler: ObservableObject {
                 return
             case .skippedMinSize:
                 await tracker.recordSkipped()
+                if structureByPage {
+                    removeDirectoryIfEmpty(at: targetFolder)
+                }
                 return
             case .failed:
                 break
@@ -1017,6 +1045,9 @@ class Crawler: ObservableObject {
         } catch {
             log("Fehler beim Herunterladen von \(urlStr): \(error.localizedDescription)", type: .error)
             await tracker.recordError()
+            if structureByPage {
+                removeDirectoryIfEmpty(at: targetFolder)
+            }
         }
     }
     
@@ -1103,6 +1134,51 @@ class Crawler: ObservableObject {
             sanitized.removeFirst()
         }
         return sanitized.isEmpty ? "file" : sanitized
+    }
+    
+    // --- DIRECTORY MANAGEMENT & CLEANUP ---
+    
+    private func isDirectoryEmpty(at url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
+            return false
+        }
+        guard let contents = try? FileManager.default.contentsOfDirectory(atPath: url.path) else {
+            return false
+        }
+        let meaningful = contents.filter { $0 != ".DS_Store" && !$0.hasPrefix("._") }
+        return meaningful.isEmpty
+    }
+    
+    private func removeDirectoryIfEmpty(at url: URL) {
+        guard url.path != targetFolder.path else { return }
+        if isDirectoryEmpty(at: url) {
+            try? FileManager.default.removeItem(at: url)
+        }
+    }
+    
+    private func cleanEmptyDirectories(at rootUrl: URL) {
+        guard rootUrl.path != targetFolder.path else { return }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: rootUrl.path, isDirectory: &isDir), isDir.boolValue else {
+            return
+        }
+        guard let items = try? FileManager.default.contentsOfDirectory(atPath: rootUrl.path) else {
+            return
+        }
+        
+        for item in items {
+            if item == ".DS_Store" || item.hasPrefix("._") { continue }
+            let childUrl = rootUrl.appendingPathComponent(item)
+            var childIsDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: childUrl.path, isDirectory: &childIsDir), childIsDir.boolValue {
+                cleanEmptyDirectories(at: childUrl)
+            }
+        }
+        
+        if isDirectoryEmpty(at: rootUrl) {
+            try? FileManager.default.removeItem(at: rootUrl)
+        }
     }
     
     // --- HELPER LOGS ---
@@ -1347,8 +1423,6 @@ class Crawler: ObservableObject {
             return .failed
         }
         
-        try? FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: true)
-        
         // 1. Try with Chrome cookies if enabled
         if useChromeCookies {
             log("Versuche Download mit Chrome-Cookies...", type: .info)
@@ -1360,7 +1434,11 @@ class Crawler: ObservableObject {
         }
         
         // 2. Try/Retry without cookies
-        return await runYtdlpProcess(ytdlpPath: ytdlpPath, url: url, targetFolder: targetFolder, refererUrl: refererUrl, useCookies: false, isAudioOnly: isAudioOnly)
+        let result = await runYtdlpProcess(ytdlpPath: ytdlpPath, url: url, targetFolder: targetFolder, refererUrl: refererUrl, useCookies: false, isAudioOnly: isAudioOnly)
+        if result != .success {
+            removeDirectoryIfEmpty(at: targetFolder)
+        }
+        return result
     }
     
     private func runYtdlpProcess(ytdlpPath: String, url: URL, targetFolder: URL, refererUrl: String?, useCookies: Bool, isAudioOnly: Bool = false) async -> YtdlpResult {
@@ -1414,6 +1492,7 @@ class Crawler: ObservableObject {
                 if isCancelled {
                     task.terminate()
                     log("yt-dlp Prozess abgebrochen.", type: .warning)
+                    removeDirectoryIfEmpty(at: targetFolder)
                     return .failed
                 }
                 
@@ -1469,6 +1548,7 @@ class Crawler: ObservableObject {
             
             if wasSkippedMinSize {
                 log("Übersprungen: Video ist kleiner als Mindestgröße (\(Int(minVideoSizeMB)) MB).", type: .info)
+                removeDirectoryIfEmpty(at: targetFolder)
                 return .skippedMinSize
             }
             
@@ -1486,6 +1566,7 @@ class Crawler: ObservableObject {
                                     if fileSize < minSizeBytes {
                                         log("Übersprungen: Video ist kleiner als Mindestgröße (\(fileSize / (1024 * 1024)) MB < \(Int(minVideoSizeMB)) MB) - \(fileName). Datei gelöscht.", type: .info)
                                         try? FileManager.default.removeItem(at: fileUrl)
+                                        removeDirectoryIfEmpty(at: targetFolder)
                                         return .skippedMinSize
                                     }
                                 }
@@ -1499,10 +1580,12 @@ class Crawler: ObservableObject {
                 return .success
             } else {
                 log("yt-dlp beendete mit Fehlercode \(task.terminationStatus).", type: .error)
+                removeDirectoryIfEmpty(at: targetFolder)
                 return .failed
             }
         } catch {
             log("Fehler beim Ausführen von yt-dlp: \(error.localizedDescription)", type: .error)
+            removeDirectoryIfEmpty(at: targetFolder)
             return .failed
         }
     }
