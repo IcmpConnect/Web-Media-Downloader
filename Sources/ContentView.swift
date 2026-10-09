@@ -116,6 +116,7 @@ struct ContentView: View {
     @State private var structureByPage = true
     @State private var downloadImages = true
     @State private var downloadVideos = false
+    @State private var minVideoSizeMB: Double = 0
     @State private var downloadDocuments = false
     @State private var downloadAudios = false
     @State private var isSearchMode = false
@@ -448,6 +449,24 @@ struct ContentView: View {
                                 .padding(.leading, 20)
                             
                             if downloadVideos {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack {
+                                        Text(loc("Minimale Videogröße:", "Minimum Video Size:"))
+                                            .font(.subheadline)
+                                        Slider(value: $minVideoSizeMB, in: 0...1000, step: 10)
+                                            .frame(maxWidth: 160)
+                                            .disabled(isCrawling)
+                                        Text(minVideoSizeMB == 0 ? loc("0 MB (Aus)", "0 MB (Off)") : (minVideoSizeMB >= 1000 ? "1 GB" : "\(Int(minVideoSizeMB)) MB"))
+                                            .font(.subheadline)
+                                            .fontWeight(.semibold)
+                                            .frame(width: 80, alignment: .trailing)
+                                    }
+                                    Text(loc("Videos unter dieser Größe überspringen (0 bis 1 GB). 0 MB schaltet den Filter aus.", "Skip videos smaller than this size (0 to 1 GB). 0 MB disables the filter."))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .padding(.leading, 20)
+                                
                                 VStack(alignment: .leading, spacing: 3) {
                                     HStack {
                                         Text(loc("Gleichzeitige Video-Downloads:", "Concurrent Video Downloads:"))
@@ -927,6 +946,7 @@ struct ContentView: View {
             startUrl: finalStartQuery,
             targetFolder: URL(fileURLWithPath: targetFolder),
             minSizeKB: minSizeKB,
+            minVideoSizeMB: minVideoSizeMB,
             maxDepth: finalIsListMode ? 0 : maxDepth,
             followExternal: followExternal,
             preventDuplicates: preventDuplicates,

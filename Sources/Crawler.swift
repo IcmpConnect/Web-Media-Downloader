@@ -96,9 +96,16 @@ actor DownloadTracker {
 }
 
 class Crawler: ObservableObject {
+    enum YtdlpResult {
+        case success
+        case skippedMinSize
+        case failed
+    }
+
     let startUrl: String
     let targetFolder: URL
     let minSizeKB: Double
+    let minVideoSizeMB: Double
     let maxDepth: Int
     let followExternal: Bool
     let preventDuplicates: Bool
@@ -130,6 +137,7 @@ class Crawler: ObservableObject {
         startUrl: String,
         targetFolder: URL,
         minSizeKB: Double,
+        minVideoSizeMB: Double = 0,
         maxDepth: Int,
         followExternal: Bool,
         preventDuplicates: Bool,
@@ -150,6 +158,7 @@ class Crawler: ObservableObject {
         self.startUrl = startUrl
         self.targetFolder = targetFolder
         self.minSizeKB = minSizeKB
+        self.minVideoSizeMB = minVideoSizeMB
         self.maxDepth = maxDepth
         self.followExternal = followExternal
         self.preventDuplicates = preventDuplicates
@@ -347,12 +356,13 @@ class Crawler: ObservableObject {
         
         log("Ziel-Ordnerpfad für diese Serie: \(jobTargetFolder.path)", type: .info)
         log("Parallelität: max. \(maxConcurrentImageDownloads) Bilder, max. \(maxConcurrentAudioDownloads) Audios, max. \(maxConcurrentDocumentDownloads) Dokumente, max. \(maxConcurrentVideoDownloads) Videos gleichzeitig.", type: .info)
+        let videoMinInfo = downloadVideos ? (minVideoSizeMB > 0 ? ", Min. Videogröße: \(Int(minVideoSizeMB)) MB" : ", Min. Videogröße: Keine") : ""
         if isListMode {
-            log("Crawler gestartet im URL-Listen-Modus. \(queue.count) URLs geladen, Minimale Größe: \(Int(minSizeKB)) KB, Bilder: \(downloadImages ? "Ja" : "Nein"), Audios: \(downloadAudios ? "Ja" : "Nein"), Dokumente: \(downloadDocuments ? "Ja" : "Nein"), Videos: \(downloadVideos ? "Ja" : "Nein")", type: .info)
+            log("Crawler gestartet im URL-Listen-Modus. \(queue.count) URLs geladen, Minimale Größe: \(Int(minSizeKB)) KB\(videoMinInfo), Bilder: \(downloadImages ? "Ja" : "Nein"), Audios: \(downloadAudios ? "Ja" : "Nein"), Dokumente: \(downloadDocuments ? "Ja" : "Nein"), Videos: \(downloadVideos ? "Ja" : "Nein")", type: .info)
         } else if isSearchMode {
-            log("Crawler gestartet. Suchbegriff: \(startUrl), Minimale Größe: \(Int(minSizeKB)) KB, Max. Tiefe: \(maxDepth), Bilder: \(downloadImages ? "Ja" : "Nein"), Audios: \(downloadAudios ? "Ja" : "Nein"), Dokumente: \(downloadDocuments ? "Ja" : "Nein"), Videos: \(downloadVideos ? "Ja" : "Nein")", type: .info)
+            log("Crawler gestartet. Suchbegriff: \(startUrl), Minimale Größe: \(Int(minSizeKB)) KB\(videoMinInfo), Max. Tiefe: \(maxDepth), Bilder: \(downloadImages ? "Ja" : "Nein"), Audios: \(downloadAudios ? "Ja" : "Nein"), Dokumente: \(downloadDocuments ? "Ja" : "Nein"), Videos: \(downloadVideos ? "Ja" : "Nein")", type: .info)
         } else {
-            log("Crawler gestartet. Start-URL: \(startUrl), Minimale Größe: \(Int(minSizeKB)) KB, Max. Tiefe: \(maxDepth), Bilder: \(downloadImages ? "Ja" : "Nein"), Audios: \(downloadAudios ? "Ja" : "Nein"), Dokumente: \(downloadDocuments ? "Ja" : "Nein"), Videos: \(downloadVideos ? "Ja" : "Nein")", type: .info)
+            log("Crawler gestartet. Start-URL: \(startUrl), Minimale Größe: \(Int(minSizeKB)) KB\(videoMinInfo), Max. Tiefe: \(maxDepth), Bilder: \(downloadImages ? "Ja" : "Nein"), Audios: \(downloadAudios ? "Ja" : "Nein"), Dokumente: \(downloadDocuments ? "Ja" : "Nein"), Videos: \(downloadVideos ? "Ja" : "Nein")", type: .info)
         }
         
         // Fast-path for URL-List Mode when downloading ONLY videos
@@ -819,11 +829,15 @@ class Crawler: ObservableObject {
             pageFolder = jobTargetFolder.appendingPathComponent(subpageName)
         }
         
-        let success = await downloadWithYtdlp(url: url, targetFolder: pageFolder, isAudioOnly: isAudioOnly)
-        if success {
+        let result = await downloadWithYtdlp(url: url, targetFolder: pageFolder, isAudioOnly: isAudioOnly)
+        switch result {
+        case .success:
             log("\(itemLabel) erfolgreich verarbeitet: \(url.lastPathComponent)", type: .success)
             await tracker.recordVideoSuccess(url: urlStr)
-        } else {
+        case .skippedMinSize:
+            log("Übersprungen: \(itemLabel) erreicht nicht die Mindestgröße - URL: \(urlStr)", type: .info)
+            await tracker.recordSkipped()
+        case .failed:
             log("yt-dlp Download fehlgeschlagen oder abgebrochen: \(url.lastPathComponent)", type: .warning)
             await tracker.recordError()
         }
@@ -843,19 +857,31 @@ class Crawler: ObservableObject {
         
         let isVideoPlatform = downloadVideos && (self.isVideoPlatform(url: url) || self.hasVideoExtension(url: url))
         if isVideoPlatform {
-            let success = await downloadWithYtdlp(url: url, targetFolder: targetFolder, refererUrl: refererUrl)
-            if success {
+            let res = await downloadWithYtdlp(url: url, targetFolder: targetFolder, refererUrl: refererUrl)
+            switch res {
+            case .success:
                 await tracker.recordVideoSuccess(url: urlStr)
                 return
+            case .skippedMinSize:
+                await tracker.recordSkipped()
+                return
+            case .failed:
+                break
             }
         }
         
         let isAudioPlatform = downloadAudios && self.isAudioPlatformItem(url: url)
         if isAudioPlatform {
-            let success = await downloadWithYtdlp(url: url, targetFolder: targetFolder, refererUrl: refererUrl, isAudioOnly: true)
-            if success {
+            let res = await downloadWithYtdlp(url: url, targetFolder: targetFolder, refererUrl: refererUrl, isAudioOnly: true)
+            switch res {
+            case .success:
                 await tracker.recordVideoSuccess(url: urlStr)
                 return
+            case .skippedMinSize:
+                await tracker.recordSkipped()
+                return
+            case .failed:
+                break
             }
         }
         
@@ -880,10 +906,18 @@ class Crawler: ObservableObject {
             }
             
             let minSizeBytes = Int64(minSizeKB * 1024)
+            let isPotentiallyVid = downloadVideos && self.hasVideoExtension(url: url)
+            let effectiveMinSizeBytes: Int64
+            if isPotentiallyVid && minVideoSizeMB > 0 {
+                effectiveMinSizeBytes = max(minSizeBytes, Int64(minVideoSizeMB * 1024 * 1024))
+            } else {
+                effectiveMinSizeBytes = minSizeBytes
+            }
             
             // Size filter check
-            if let len = contentLength, len < minSizeBytes {
-                log("Übersprungen: Datei ist zu klein (\(len / 1024) KB) - URL: \(urlStr)", type: .info)
+            if let len = contentLength, len < effectiveMinSizeBytes {
+                let sizeDisplay = effectiveMinSizeBytes >= 1024 * 1024 ? "\(len / (1024 * 1024)) MB" : "\(len / 1024) KB"
+                log("Übersprungen: Datei ist zu klein (\(sizeDisplay)) - URL: \(urlStr)", type: .info)
                 await tracker.recordSkipped()
                 return
             }
@@ -917,8 +951,16 @@ class Crawler: ObservableObject {
             }
             
             let actualSize = Int64(data.count)
-            if actualSize < minSizeBytes {
-                log("Übersprungen: Datei ist zu klein (\(actualSize / 1024) KB) - URL: \(urlStr)", type: .info)
+            let isActualVid = downloadVideos && ((httpResponse.mimeType?.hasPrefix("video/") ?? false) || self.hasVideoExtension(url: url))
+            let finalMinSizeBytes: Int64
+            if isActualVid && minVideoSizeMB > 0 {
+                finalMinSizeBytes = max(minSizeBytes, Int64(minVideoSizeMB * 1024 * 1024))
+            } else {
+                finalMinSizeBytes = minSizeBytes
+            }
+            if actualSize < finalMinSizeBytes {
+                let sizeDisplay = finalMinSizeBytes >= 1024 * 1024 ? "\(actualSize / (1024 * 1024)) MB" : "\(actualSize / 1024) KB"
+                log("Übersprungen: Datei ist zu klein (\(sizeDisplay)) - URL: \(urlStr)", type: .info)
                 await tracker.recordSkipped()
                 return
             }
@@ -1299,10 +1341,10 @@ class Crawler: ObservableObject {
         return nil
     }
     
-    private func downloadWithYtdlp(url: URL, targetFolder: URL, refererUrl: String? = nil, isAudioOnly: Bool = false) async -> Bool {
+    private func downloadWithYtdlp(url: URL, targetFolder: URL, refererUrl: String? = nil, isAudioOnly: Bool = false) async -> YtdlpResult {
         guard let ytdlpPath = findYtdlpPath() else {
             log("yt-dlp wurde nicht gefunden. Bitte installieren Sie es mit 'brew install yt-dlp' für Plattform-Downloads.", type: .warning)
-            return false
+            return .failed
         }
         
         try? FileManager.default.createDirectory(at: targetFolder, withIntermediateDirectories: true)
@@ -1310,9 +1352,9 @@ class Crawler: ObservableObject {
         // 1. Try with Chrome cookies if enabled
         if useChromeCookies {
             log("Versuche Download mit Chrome-Cookies...", type: .info)
-            let success = await runYtdlpProcess(ytdlpPath: ytdlpPath, url: url, targetFolder: targetFolder, refererUrl: refererUrl, useCookies: true, isAudioOnly: isAudioOnly)
-            if success {
-                return true
+            let result = await runYtdlpProcess(ytdlpPath: ytdlpPath, url: url, targetFolder: targetFolder, refererUrl: refererUrl, useCookies: true, isAudioOnly: isAudioOnly)
+            if result == .success || result == .skippedMinSize {
+                return result
             }
             log("Download mit Chrome-Cookies fehlgeschlagen. Versuche es ohne Cookies...", type: .warning)
         }
@@ -1321,7 +1363,7 @@ class Crawler: ObservableObject {
         return await runYtdlpProcess(ytdlpPath: ytdlpPath, url: url, targetFolder: targetFolder, refererUrl: refererUrl, useCookies: false, isAudioOnly: isAudioOnly)
     }
     
-    private func runYtdlpProcess(ytdlpPath: String, url: URL, targetFolder: URL, refererUrl: String?, useCookies: Bool, isAudioOnly: Bool = false) async -> Bool {
+    private func runYtdlpProcess(ytdlpPath: String, url: URL, targetFolder: URL, refererUrl: String?, useCookies: Bool, isAudioOnly: Bool = false) async -> YtdlpResult {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: ytdlpPath)
         
@@ -1331,6 +1373,8 @@ class Crawler: ObservableObject {
         ]
         if isAudioOnly {
             args.append(contentsOf: ["-x", "--audio-format", "mp3"])
+        } else if minVideoSizeMB > 0 {
+            args.append(contentsOf: ["--min-filesize", "\(Int(minVideoSizeMB))M"])
         }
         if useCookies {
             args.append(contentsOf: ["--cookies-from-browser", "chrome"])
@@ -1351,10 +1395,12 @@ class Crawler: ObservableObject {
         task.standardError = pipe
         
         let fileHandle = pipe.fileHandleForReading
+        let startTime = Date()
+        var wasSkippedMinSize = false
         
         do {
             guard registerActiveProcess(task) else {
-                return false
+                return .failed
             }
             
             defer {
@@ -1368,7 +1414,7 @@ class Crawler: ObservableObject {
                 if isCancelled {
                     task.terminate()
                     log("yt-dlp Prozess abgebrochen.", type: .warning)
-                    return false
+                    return .failed
                 }
                 
                 if let data = try? fileHandle.read(upToCount: 512), !data.isEmpty,
@@ -1377,6 +1423,9 @@ class Crawler: ObservableObject {
                     for line in lines {
                         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                         if !trimmed.isEmpty {
+                            if trimmed.contains("File is smaller than min-filesize") || trimmed.contains("is smaller than min-filesize") {
+                                wasSkippedMinSize = true
+                            }
                             if trimmed.contains("ERROR:") {
                                 log("[yt-dlp-Fehler] \(trimmed)", type: .error)
                             } else if trimmed.contains("WARNING:") {
@@ -1402,6 +1451,9 @@ class Crawler: ObservableObject {
                 for line in lines {
                     let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty {
+                        if trimmed.contains("File is smaller than min-filesize") || trimmed.contains("is smaller than min-filesize") {
+                            wasSkippedMinSize = true
+                        }
                         if trimmed.contains("ERROR:") {
                             log("[yt-dlp-Fehler] \(trimmed)", type: .error)
                         } else if trimmed.contains("WARNING:") {
@@ -1415,17 +1467,43 @@ class Crawler: ObservableObject {
             
             task.waitUntilExit()
             
+            if wasSkippedMinSize {
+                log("Übersprungen: Video ist kleiner als Mindestgröße (\(Int(minVideoSizeMB)) MB).", type: .info)
+                return .skippedMinSize
+            }
+            
             if task.terminationStatus == 0 {
+                if !isAudioOnly && minVideoSizeMB > 0 {
+                    let minSizeBytes = Int64(minVideoSizeMB * 1024 * 1024)
+                    if let currentFiles = try? FileManager.default.contentsOfDirectory(atPath: targetFolder.path) {
+                        for fileName in currentFiles {
+                            let fileUrl = targetFolder.appendingPathComponent(fileName)
+                            if self.hasVideoExtension(url: fileUrl) {
+                                if let attrs = try? FileManager.default.attributesOfItem(atPath: fileUrl.path),
+                                   let modDate = attrs[.modificationDate] as? Date,
+                                   modDate >= startTime.addingTimeInterval(-5.0),
+                                   let fileSize = attrs[.size] as? Int64 {
+                                    if fileSize < minSizeBytes {
+                                        log("Übersprungen: Video ist kleiner als Mindestgröße (\(fileSize / (1024 * 1024)) MB < \(Int(minVideoSizeMB)) MB) - \(fileName). Datei gelöscht.", type: .info)
+                                        try? FileManager.default.removeItem(at: fileUrl)
+                                        return .skippedMinSize
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 let itemLabel = isAudioOnly ? "Audio" : "Video"
                 log("\(itemLabel) erfolgreich über yt-dlp heruntergeladen.", type: .success)
-                return true
+                return .success
             } else {
                 log("yt-dlp beendete mit Fehlercode \(task.terminationStatus).", type: .error)
-                return false
+                return .failed
             }
         } catch {
             log("Fehler beim Ausführen von yt-dlp: \(error.localizedDescription)", type: .error)
-            return false
+            return .failed
         }
     }
 }

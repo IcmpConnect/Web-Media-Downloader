@@ -161,7 +161,7 @@ struct HelpView: View {
         case .concurrency:
             return "parallelität downloads gleichzeitig geschwindigkeit performance taskgroup rate limit 429 concurrency speed parallel"
         case .videoDownloads:
-            return "yt-dlp videos ffmpeg stream m3u8 manifest cookies chrome watch player streaming hls dash"
+            return "yt-dlp videos ffmpeg stream m3u8 manifest cookies chrome watch player streaming hls dash mindestgröße videogröße schieberegler minimum video size slider"
         case .documentDownloads:
             return "dokumente pdf word excel powerpoint office docx xlsx pptx odt ods odp rtf txt csv epub berichte documents spreadsheets slides"
         case .audioDownloads:
@@ -422,6 +422,18 @@ struct HelpView: View {
                     Text(isDe ? "Manche Videos (z. B. Altersbeschränkungen oder Login-Bereiche) erfordern eine Anmeldung." : "Some media (e.g. age-restricted content or member portals) require an active user session.")
                     Text(isDe ? "• Wenn Sie **'Chrome-Cookies importieren'** aktivieren, nutzt `yt-dlp` Ihre bestehenden Logins aus Google Chrome." : "• When **'Import Chrome Cookies'** is enabled, `yt-dlp` borrows your logged-in cookies from Google Chrome.")
                     Text(isDe ? "• **Auto-Fallback:** Sollte Chrome nicht verfügbar sein, schlägt der Download nicht fehl, sondern wiederholt den Versuch vollautomatisch ohne Cookies." : "• **Auto-Fallback:** If Chrome is not available or has no active session, the app automatically retries without cookies.")
+                }
+            }
+            
+            card(title: isDe ? "Minimale Videogröße (0 bis 1 GB)" : "Minimum Video Size (0 to 1 GB)", icon: "slider.horizontal.3") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(isDe ?
+                        "Über den Schieberegler **'Minimale Videogröße'** können Sie gezielt verhindern, dass sehr kurze Video-Schnipsel, Werbeclips oder niedrig aufgelöste Vorschaudateien heruntergeladen werden:" :
+                        "With the **'Minimum Video Size'** slider, you can selectively prevent downloading very short video snippets, advertisements, or low-resolution clips:")
+                    Text(isDe ? "• **0 MB (Aus):** Alle gefundenen Videos werden unabhängig von ihrer Dateigröße heruntergeladen." : "• **0 MB (Off):** All discovered videos are downloaded regardless of their file size.")
+                    Text(isDe ? "• **10 MB bis 1 GB:** Videos, die kleiner als der gewählte Schwellenwert sind, werden automatisch übersprungen." : "• **10 MB to 1 GB:** Videos smaller than the configured threshold are skipped automatically.")
+                    Text(isDe ? "• **Plattform-Downloads (yt-dlp):** Es wird der Parameter `--min-filesize` übergeben. Zudem prüft die App das fertige Video nach Abschluss nochmals im Zielordner und entfernt es, falls es unter der Mindestgröße liegt (z. B. bei Live-Streams oder HLS-Streams, bei denen die Dateigröße vorab nicht bekannt ist)." : "• **Platform Downloads (yt-dlp):** The `--min-filesize` parameter is supplied to yt-dlp. In addition, the app inspects the final video file in the target directory upon completion and removes it if it falls below the minimum size (e.g. for streams where size is unknown in advance).")
+                    Text(isDe ? "• **Direkte HTTP-Downloads:** Der Crawler prüft vor dem Download die `Content-Length`-Header sowie nach dem Laden die reale Dateigröße." : "• **Direct HTTP Downloads:** The crawler checks the `Content-Length` header beforehand and validates the actual downloaded file size.")
                 }
             }
         }
